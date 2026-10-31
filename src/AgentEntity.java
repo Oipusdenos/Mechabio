@@ -2,6 +2,15 @@ package com.agentmod;
 
 import net.minecraft.block.*;
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.entity.EquipmentSlot;
+import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.Items;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.world.GameRules;
+import java.util.ArrayDeque;
+import java.util.List;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
@@ -58,6 +67,17 @@ public class AgentEntity extends PathAwareEntity {
     private BlockPos roost;
     private BlockPos lightPos;
 
+    // energia: redstone e a "comida" (dust = 1 min, bloco = 9 min). Perto de redstone ligada ele nao gasta.
+    public static final int MAX_ENERGY = 24000;
+    private int energy = 6000;
+    private boolean nearPower;
+
+    // tarefas de blocos (/agent break, /agent place)
+    private record BlockTask(boolean place, BlockPos pos) {}
+    private final ArrayDeque<BlockTask> tasks = new ArrayDeque<>();
+    private int taskTicks;
+    private int mineProgress;
+
     private Fetch fetch = Fetch.NONE;
     private Item fetchItem;
     private int fetchCount;
@@ -108,7 +128,11 @@ public class AgentEntity extends PathAwareEntity {
     }
 
     private void think() {
-        if (age % 20 == 0) powered = checkPower();
+        if (age % 20 == 0) nearPower = checkPower();
+        if (energy <= 0 && !nearPower) eatFromInventory();
+        powered = energy > 0 || nearPower;
+        if (powered && !nearPower && !isSitting()) energy = Math.max(0, energy - 10);
+        refreshHand();
         double speed = powered ? 1.0 : 0.35;      // sem redstone = bem mais lento
         getNavigation().setSpeed(speed);
         dataTracker.set(CARRYING, !inventory.isEmpty());
@@ -123,6 +147,7 @@ public class AgentEntity extends PathAwareEntity {
         }
 
         if (fetch != Fetch.NONE) { fetchBehaviour(speed); return; }
+        if (!tasks.isEmpty()) { blockTask(speed); return; }
 
         PlayerEntity o = getOwner();
         switch (mode) {
@@ -372,6 +397,14 @@ public class AgentEntity extends PathAwareEntity {
             else { path = pts; pathIndex = 0; mode = Mode.PATROL; say(player, "Patrulhando " + pts.length + " pontos."); }
             return ActionResult.SUCCESS;
         }
+        int food = foodValue(held);
+        if (food > 0 && energy < MAX_ENERGY) {
+            if (!player.getAbilities().creativeMode) held.decrement(1);
+            energy = Math.min(MAX_ENERGY, energy + food);
+            playSound(SoundEvents.ENTITY_GENERIC_EAT, 1.0f, 1.0f);
+            say(player, "Energia: " + (energy / 1200) + " min");
+            return ActionResult.SUCCESS;
+        }
         if (held.isEmpty()) {
             if (player.isSneaking()) {
                 mode = switch (mode) { case FOLLOW -> Mode.STAY; case STAY -> Mode.COLLECT; default -> Mode.FOLLOW; };
@@ -387,6 +420,115 @@ public class AgentEntity extends PathAwareEntity {
         return ActionResult.SUCCESS;
     }
 
+    // ------------------------------------------------------------ energia (redstone = comida)
+    private static int foodValue(ItemStack s) {
+        if (s.isOf(Items.REDSTONE)) return 1200;
+        if (s.isOf(Items.REDSTONE_BLOCK)) return 10800;
+        return 0;
+    }
+
+    private void eatFromInventory() {
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack s = inventory.getStack(i);
+            int v = foodValue(s);
+            if (v > 0) {
+                s.decrement(1);
+                inventory.markDirty();
+                energy = Math.min(MAX_ENERGY, energy + v);
+                playSound(SoundEvents.ENTITY_GENERIC_EAT, 1.0f, 1.0f);
+                return;
+            }
+        }
+    }
+
+    public String status() {
+        int n = 0;
+        for (int i = 0; i < inventory.size(); i++) n += inventory.getStack(i).getCount();
+        return "Energia: " + (energy / 1200) + " min" + (nearPower ? " (perto de redstone ligada)" : "")
+                + " | Modo: " + mode + " | Tarefas de bloco: " + tasks.size() + " | Itens: " + n;
+    }
+
+    // ------------------------------------------------------------ item na mao
+    private ItemStack firstBlockStack() {
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack s = inventory.getStack(i);
+            if (!s.isEmpty() && s.getItem() instanceof BlockItem) return s;
+        }
+        return ItemStack.EMPTY;
+    }
+
+    private void refreshHand() {
+        ItemStack want = ItemStack.EMPTY;
+        BlockTask t = tasks.peek();
+        if (t != null && t.place()) want = firstBlockStack();
+        if (want.isEmpty()) {
+            for (int i = 0; i < inventory.size(); i++) {
+                if (!inventory.getStack(i).isEmpty()) { want = inventory.getStack(i); break; }
+            }
+        }
+        ItemStack w1 = want.isEmpty() ? ItemStack.EMPTY : want.copyWithCount(1);
+        if (!ItemStack.areEqual(getMainHandStack(), w1)) equipStack(EquipmentSlot.MAINHAND, w1);
+    }
+
+    // ------------------------------------------------------------ quebrar / construir
+    public void queueBreak(BlockPos p) { tasks.add(new BlockTask(false, p.toImmutable())); }
+
+    public boolean queuePlace(BlockPos p) {
+        if (firstBlockStack().isEmpty()) return false;
+        tasks.add(new BlockTask(true, p.toImmutable()));
+        return true;
+    }
+
+    public void clearTasks() { tasks.clear(); taskTicks = 0; mineProgress = 0; }
+
+    private void finishTask(String msg) {
+        tasks.poll();
+        taskTicks = 0;
+        mineProgress = 0;
+        PlayerEntity o = getOwner();
+        if (o != null && (msg != null || tasks.isEmpty())) say(o, msg != null ? msg : "Tarefas de bloco concluidas.");
+    }
+
+    private void blockTask(double speed) {
+        BlockTask t = tasks.peek();
+        World w = getWorld();
+        Vec3d c = Vec3d.ofCenter(t.pos());
+        taskTicks += 10;
+        if (taskTicks > 900) { finishTask("Nao consegui chegar no bloco."); return; }
+        if (squaredDistanceTo(c) > 16) { getNavigation().startMovingTo(c.x, c.y, c.z, speed); return; }
+        if (!(w instanceof ServerWorld sw)) return;
+        if (!sw.getGameRules().getBoolean(GameRules.DO_MOB_GRIEFING)) { finishTask("mobGriefing esta desligado."); return; }
+        getNavigation().stop();
+        getLookControl().lookAt(c.x, c.y, c.z);
+        swingHand(Hand.MAIN_HAND);
+        BlockState st = w.getBlockState(t.pos());
+        if (t.place()) {
+            ItemStack s = firstBlockStack();
+            if (s.isEmpty()) { finishTask("Sem blocos para colocar."); return; }
+            BlockState ns = ((BlockItem) s.getItem()).getBlock().getDefaultState();
+            if (st.isReplaceable() && w.canPlace(ns, t.pos(), ShapeContext.absent())) {
+                w.setBlockState(t.pos(), ns);
+                w.playSound(null, t.pos(), ns.getSoundGroup().getPlaceSound(), SoundCategory.BLOCKS, 1.0f, 1.0f);
+                s.decrement(1);
+                inventory.markDirty();
+                finishTask(null);
+            } else finishTask("Nao deu para colocar o bloco ali.");
+        } else {
+            float hard = st.getHardness(w, t.pos());
+            if (st.isAir() || hard < 0 || !st.getFluidState().isEmpty()) { finishTask(null); return; }
+            mineProgress += 10;
+            if (mineProgress >= Math.max(10.0f, hard * 30.0f)) {
+                List<ItemStack> drops = Block.getDroppedStacks(st, sw, t.pos(), w.getBlockEntity(t.pos()), this, ItemStack.EMPTY);
+                w.breakBlock(t.pos(), false, this);
+                for (ItemStack d : drops) {
+                    ItemStack rest = inventory.addStack(d);
+                    if (!rest.isEmpty()) Block.dropStack(w, t.pos(), rest);
+                }
+                finishTask(null);
+            }
+        }
+    }
+
     // ------------------------------------------------------------ salvar/carregar
     @Override
     public void writeCustomDataToNbt(NbtCompound nbt) {
@@ -394,6 +536,7 @@ public class AgentEntity extends PathAwareEntity {
         nbt.put("Inv", inventory.toNbtList(getRegistryManager()));
         nbt.putInt("Mode", mode.ordinal());
         nbt.putLongArray("Path", path);
+        nbt.putInt("Energy", energy);
         if (owner != null) nbt.putUuid("Owner", owner);
     }
 
@@ -403,7 +546,14 @@ public class AgentEntity extends PathAwareEntity {
         inventory.readNbtList(nbt.getList("Inv", NbtElement.COMPOUND_TYPE), getRegistryManager());
         mode = Mode.values()[Math.min(nbt.getInt("Mode"), Mode.values().length - 1)];
         path = nbt.getLongArray("Path");
+        if (nbt.contains("Energy")) energy = nbt.getInt("Energy");
         if (nbt.containsUuid("Owner")) owner = nbt.getUuid("Owner");
+    }
+
+    @Override
+    public void onDeath(DamageSource source) {
+        equipStack(EquipmentSlot.MAINHAND, ItemStack.EMPTY);   // evita duplicar o item da mao
+        super.onDeath(source);
     }
 
     @Override

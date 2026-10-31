@@ -13,6 +13,8 @@ import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 
 import java.util.Comparator;
 import java.util.List;
@@ -32,7 +34,11 @@ public class AgentCommands {
                                 .executes(c -> fetch(c, 64))
                                 .then(CommandManager.argument("count", IntegerArgumentType.integer(1, 576))
                                         .executes(c -> fetch(c, IntegerArgumentType.getInteger(c, "count"))))))
-                .then(CommandManager.literal("give").executes(AgentCommands::give)));
+                .then(CommandManager.literal("give").executes(AgentCommands::give))
+                .then(CommandManager.literal("break").executes(AgentCommands::breakBlock))
+                .then(CommandManager.literal("place").executes(AgentCommands::placeBlock))
+                .then(CommandManager.literal("cancel").executes(AgentCommands::cancel))
+                .then(CommandManager.literal("status").executes(AgentCommands::status)));
     }
 
     private static AgentEntity find(CommandContext<ServerCommandSource> c) throws CommandSyntaxException {
@@ -67,6 +73,42 @@ public class AgentCommands {
         Item item = ItemStackArgumentType.getItemStackArgument(c, "item").getItem();
         boolean ok = a.startFetch(c.getSource().getPlayerOrThrow().getUuid(), item, count);
         return msg(c, ok ? "Agente indo buscar no baú." : "Nenhum baú com esse item num raio de 16 blocos do agente.", ok ? 1 : 0);
+    }
+
+    private static BlockHitResult olhando(ServerPlayerEntity p) {
+        HitResult h = p.raycast(24.0, 1.0f, false);
+        return (h instanceof BlockHitResult b && b.getType() == HitResult.Type.BLOCK) ? b : null;
+    }
+
+    private static int breakBlock(CommandContext<ServerCommandSource> c) throws CommandSyntaxException {
+        AgentEntity a = find(c);
+        if (a == null) return msg(c, "Nenhum agente seu num raio de 64 blocos.", 0);
+        BlockHitResult h = olhando(c.getSource().getPlayerOrThrow());
+        if (h == null) return msg(c, "Olhe para o bloco que ele deve quebrar.", 0);
+        a.queueBreak(h.getBlockPos());
+        return msg(c, "Agente vai quebrar o bloco que voce esta olhando.", 1);
+    }
+
+    private static int placeBlock(CommandContext<ServerCommandSource> c) throws CommandSyntaxException {
+        AgentEntity a = find(c);
+        if (a == null) return msg(c, "Nenhum agente seu num raio de 64 blocos.", 0);
+        BlockHitResult h = olhando(c.getSource().getPlayerOrThrow());
+        if (h == null) return msg(c, "Olhe para o bloco ao lado de onde ele deve construir.", 0);
+        boolean ok = a.queuePlace(h.getBlockPos().offset(h.getSide()));
+        return msg(c, ok ? "Agente vai colocar um bloco ali." : "O agente nao tem nenhum bloco no inventario.", ok ? 1 : 0);
+    }
+
+    private static int cancel(CommandContext<ServerCommandSource> c) throws CommandSyntaxException {
+        AgentEntity a = find(c);
+        if (a == null) return msg(c, "Nenhum agente seu num raio de 64 blocos.", 0);
+        a.clearTasks();
+        return msg(c, "Tarefas de bloco canceladas.", 1);
+    }
+
+    private static int status(CommandContext<ServerCommandSource> c) throws CommandSyntaxException {
+        AgentEntity a = find(c);
+        if (a == null) return msg(c, "Nenhum agente seu num raio de 64 blocos.", 0);
+        return msg(c, a.status(), 1);
     }
 
     private static int give(CommandContext<ServerCommandSource> c) throws CommandSyntaxException {
