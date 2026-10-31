@@ -1,4 +1,5 @@
-name: .github/workflows/
+.github/workflows/main.yml
+name: fabrica-de-mods
 on:
   push:
     paths: ['src/**', 'resources/**', 'fabrica.properties']
