@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "agent",
+  "version": "${version}",
+  "name": "Agent",
+  "description": "Um ajudante robótico de cobre: segue, coleta, patrulha e busca itens em baús. Precisa de redstone por perto.",
+  "authors": ["você"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.agentmod.AgentMod"],
+    "client": ["com.agentmod.AgentClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
