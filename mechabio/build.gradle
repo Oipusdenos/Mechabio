@@ -11,7 +11,9 @@ dependencies {
 }
 processResources {
     inputs.property "version", project.version
-    filesMatching("fabric.mod.json") { expand "version": project.version }
+    filesMatching("fabric.mod.json") {
+        filter { line -> line.replace('${version}', project.version.toString()) }
+    }
 }
 tasks.withType(JavaCompile).configureEach { it.options.release = 21 }
 java {
