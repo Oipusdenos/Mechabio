@@ -1,3 +1,4 @@
+.github/workflows/
 name: fabrica-de-mods
 on:
   push:
