@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {
+      "item": "mechabio:redstone_laser"
+    },
+    {
+      "item": "mechabio:guardian_eye"
+    },
+    {
+      "item": "minecraft:prismarine_crystals"
+    }
+  ],
+  "result": {
+    "id": "mechabio:guardian_laser",
+    "count": 1
+  }
+}

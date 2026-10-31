@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "mechabio",
+  "version": "${version}",
+  "name": "Mecha-Bio",
+  "description": "Mistura peças mecânicas (cobre/redstone) e biológicas (Guardian/Warden): lasers, comunicadores e golens.",
+  "authors": [
+    "você"
+  ],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.mechabio.MechaBioMod"
+    ],
+    "client": [
+      "com.mechabio.MechaBioMod$Client"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

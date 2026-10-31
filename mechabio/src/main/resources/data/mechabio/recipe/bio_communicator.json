@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {
+      "item": "mechabio:mechanical_calculator"
+    },
+    {
+      "item": "mechabio:warden_antenna"
+    },
+    {
+      "item": "minecraft:sculk_sensor"
+    }
+  ],
+  "result": {
+    "id": "mechabio:bio_communicator",
+    "count": 1
+  }
+}
